@@ -1,0 +1,158 @@
+---
+title: "Mussel Coverage Project"
+author: "Gravem Lab"
+date: "2026-10-09"
+output: html_document
+---
+
+Mussel Cover Data Preparation
+# Contents
+
+# Annotate the data (add metadata columns)
+# Calculate change in cover over time
+# Add shore level data 
+
+Read data
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(writexl) #write xlsx files
+#load the mussel data from the model output
+library(readr)
+
+Cov1<-read_csv("VT_mussel_cover_READONLY.csv")
+View(Cov1)
+```
+
+Break Name into Columns
+
+```{r}
+Cov2 <- Cov1 %>%
+  extract(
+    Name,
+    into = c("Date", "SiteCode_STARS", "Transect", "MeterMarking"),
+   regex = "(?i).*?(\\d{4}-\\d{2}-\\d{2})_([^_]+)_([^_]+)_([^_]+?)(?:_(?:top|bot))?\\.(?:JPG|jpeg|png)$",remove = FALSE) %>%
+  rename(Photo = Name)%>%
+  separate(
+    Date,
+    into = c("Year", "Month", "Day"), 
+    sep = "-",
+    remove = FALSE) %>%
+select(-Path, -`Relative Path`) %>%
+  mutate(
+    Year = as.numeric(Year),
+    Month = as.numeric(Month),
+    Day = as.numeric(Day),
+    MeterMarking = as.numeric(MeterMarking),
+    Date = as.Date(Date))%>%
+  unite(SiteCode_STARS,Transect, sep = "_", col = "TransectID", remove = F)%>%
+  mutate(
+  QuadID = paste(TransectID, sprintf("%05.2f", MeterMarking), sep = "_")
+)
+view(Cov2)
+
+```
+
+```{r}
+#import site data
+Sites <- read_excel("C:/Users/ljohn144/Cal Poly/Gravem Lab - Documents/Projects/Intertidal Monitoring/SitesAndMaps/SiteList_STARS_2026-10-13_NHH.xlsx") # To run the code, you gotta pull the dataset from the lab
+view(Sites)
+Sites <- Sites %>%
+  select(Cape, Region, SiteCode_STARS, Site, Latitude, Longitude, SiteType)
+view(Sites)
+
+
+#import shore level data
+ShoreLevels <- read_excel("C:/Users/ljohn144/Cal Poly/Gravem Lab - Documents/Projects/Intertidal Monitoring/ShoreLevels/Data_ShoreLevels/Projects_All/VertTrans_ShoreLevels/ShoreLevels_VertTrans_2026-10-09_NHH.xlsx")
+View(ShoreLevels)
+ShoreLevels1 <- ShoreLevels %>%
+  rename(SiteCode = SiteCode_STARS) %>%
+  select(QuadID, ShoreLevelOfPoint_mMLLW) 
+view(ShoreLevels1)
+```
+
+Add shore level information
+```{r}
+#add site info
+Cov3 <- Cov2 %>%
+  left_join(Sites,(by =
+      "SiteCode_STARS"))
+view(Cov3)
+
+#add shore levels
+Cov4 <- Cov3 %>%
+  left_join(ShoreLevels1,(by =
+      "QuadID"))
+view(Cov4)
+
+#create new column called  Prop Cover (old data are labeled % cover but its actually a proportion)
+
+
+
+
+```
+
+
+```{r}
+#rename percent cover to be easier to type for later
+#calc prop cov
+#Calculate Change in Mussel Cover
+
+Cov5 <- Cov4 %>%
+  rename(PercCov= `Mussel Percent Cover Estimate`) %>%
+  mutate(PropCov = PercCov/100)%>%
+  group_by(QuadID) %>% #this directs it to only calc changes within a quadrat
+  arrange(Date, .by_group = TRUE) %>% #this makes sure the data are sorted from oldest to newest within each quadrat
+  mutate(MussPres = ifelse(PercCov > 0, 1, 0),
+         Change_PctCov = PercCov - lag(PercCov),
+         Change_PropCov = PropCov - lag(PropCov))
+
+
+View(Cov5)
+```
+
+Add Pre Wasting Bed Limit Data and Classify Bed Zones
+```{r}
+library(readxl)
+PreWastingBedLimits <- read_excel("C:/Users/ljohn144/Cal Poly/Gravem Lab - Documents/Projects/Intertidal Monitoring/VerticalTransects/Data_VerticalTransects/Data_VT_BedLimits/BedLimits_Master/PreWastingBedLimits_2026-10-24_SAG.xlsx")
+View(PreWastingBedLimits) 
+
+PreWastingBedLimits1 <-PreWastingBedLimits %>%
+  select(TransectID, LL_Main_mMLLW,ML_Main_mMLLW,UL_Main_mMLLW)
+view(PreWastingBedLimits1)
+Cov6 <- Cov4 %>% # Original code used the dataset from Cov1, which doesn't have a column called 'TransectID'. It was created in Cov2. We changed it to be Cov6 <- Cov4
+  left_join(PreWastingBedLimits1, by = "TransectID")%>%
+  mutate(
+    OriginalBedPosition = case_when(
+      ShoreLevelOfPoint_mMLLW > UL_Main_mMLLW ~ "Above Bed",
+      ShoreLevelOfPoint_mMLLW > ML_Main_mMLLW &
+        ShoreLevelOfPoint_mMLLW <= UL_Main_mMLLW ~ "Upper Bed",
+      ShoreLevelOfPoint_mMLLW >= LL_Main_mMLLW &
+        ShoreLevelOfPoint_mMLLW <= ML_Main_mMLLW ~ "Lower Bed",
+      ShoreLevelOfPoint_mMLLW < LL_Main_mMLLW ~ "Below Bed",
+      TRUE ~ NA_character_)) # Looking at the data, the code is doing what it's supposed to with the limits, but I'm not sure if the limits need to be changed or if they're backwards or something. I found a few weird points where the mussels would be labeled as 'Above Bed', but it was still following the guidelines. The only thing we changed was using Cov4 instead of Cov1 and renaming the new datasheet to Cov6. 
+view(Cov6)
+  
+```
+
+
+```{r}
+## Arrange columns
+Cov7 <- Cov5 %>%
+  select(QuadID, `TransectID`,
+         Date,Year,Month,Day,
+         Cape, Region, SiteCode_STARS, Site, Latitude, Longitude, SiteType,
+         Transect,MeterMarking,ShoreLevelOfPoint_mMLLW, Photo,
+         `Total Patches`, `MytCal Patches`,`MytTro Patches`,`Combined Mussel Patches`, 
+         PercCov, PropCov, MussPres, Change_PctCov,Change_PropCov, everything()) # rearrange
+View(Cov7)
+
+#save file as new master in master data file and in current stats folder
+
+write_xlsx(Cov6, paste0("VT_MussCoverMaster_", Sys.Date(), "_SAG.xlsx"))
+
+```
+
+
+
